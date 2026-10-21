@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Download the task bundle</title>
+<style>body{font:17px/1.6 system-ui,sans-serif;max-width:680px;margin:60px auto;padding:0 24px;color:#17212b;background:#f5f7fa}main{background:white;padding:28px;border-radius:16px}h1{line-height:1.2}label{display:block;margin:20px 0 8px}input{box-sizing:border-box;max-width:100%}input[type=password]{width:100%;padding:12px;font:16px monospace}button{margin-top:24px;padding:14px 20px;background:#194bc7;color:white;border:0;border-radius:8px;font:inherit;cursor:pointer}button:disabled{opacity:.6}#status{white-space:pre-wrap}small{color:#506070}</style>
+<main><h1>Download the task bundle</h1><p>Select all four encrypted parts and enter the separately provided key. Decryption happens in your browser; this page makes no network requests.</p>
+<label for="parts">1. Select all four .bin files</label><input id="parts" type="file" accept=".bin" multiple>
+<label for="key">2. Paste the download key</label><input id="key" type="password" autocomplete="off" spellcheck="false">
+<button id="unlock" type="button">Unlock and download ZIP</button><p id="status" role="status" aria-live="polite"></p>
+<small>Keep the key separate from the public package. The resulting ZIP is the original, locally validated task bundle.</small></main>
+<script>
+'use strict';
+const config={"filename":"schema-report-throughput-v2.zip","bytes":1867134,"sha256":"81bfcc50cf5b061d5a7a0f7b60d21d9133ab5665b81fd7e3de6079678a94a414","parts":[{"name":"part01.bin","aad":"schema-report-throughput/download/v1:1/4","bytes":466812},{"name":"part02.bin","aad":"schema-report-throughput/download/v1:2/4","bytes":466812},{"name":"part03.bin","aad":"schema-report-throughput/download/v1:3/4","bytes":466812},{"name":"part04.bin","aad":"schema-report-throughput/download/v1:4/4","bytes":466810}]};
+const status=document.querySelector('#status'), button=document.querySelector('#unlock');
+button.addEventListener('click',async()=>{
+ button.disabled=true;
+ try{
+  if(!globalThis.crypto?.subtle)throw new Error('This browser does not support local Web Crypto. Open this file in a current Chrome, Edge, or Firefox browser.');
+  const chosen=[...document.querySelector('#parts').files];
+  if(chosen.length!==config.parts.length)throw new Error('Select exactly the four .bin files from this package.');
+  const files=new Map(chosen.map(f=>[f.name,f]));
+  if(files.size!==4||config.parts.some(p=>!files.has(p.name)))throw new Error('The selected filenames do not match this package.');
+  const value=document.querySelector('#key').value.trim();
+  if(!/^[A-Za-z0-9_-]{43}$/.test(value))throw new Error('Paste the complete 43-character download key.');
+  const raw=Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='),c=>c.charCodeAt(0));
+  const key=await crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt']);raw.fill(0);
+  const joined=new Uint8Array(config.bytes);let offset=0;
+  for(let i=0;i<config.parts.length;i++){
+   status.textContent=`Decrypting part ${i+1} of 4…`;
+   const part=config.parts[i], file=files.get(part.name);
+   if(file.size!==part.bytes)throw new Error('An encrypted part is incomplete or belongs to a different package.');
+   const payload=new Uint8Array(await file.arrayBuffer());
+   let plain;
+   try{plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:payload.subarray(0,12),additionalData:new TextEncoder().encode(part.aad),tagLength:128},key,payload.subarray(12)));}
+   catch{throw new Error('Could not decrypt. Check the key and make sure all four files came from this package.');}
+   joined.set(plain,offset);offset+=plain.length;plain.fill(0);
+  }
+  if(offset!==config.bytes)throw new Error('The decrypted file size is incorrect.');
+  status.textContent='Verifying the original ZIP…';
+  const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',joined))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  if(digest!==config.sha256)throw new Error('The original ZIP integrity check failed.');
+  const url=URL.createObjectURL(new Blob([joined],{type:'application/zip'}));joined.fill(0);
+  const link=document.createElement('a');link.href=url;link.download=config.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  document.querySelector('#key').value='';status.textContent='Verified. Your download of '+config.filename+' has started.';
+ }catch(error){status.textContent=error.message||'The download could not be completed.';}
+ finally{button.disabled=false;}
+});
+</script></html>
